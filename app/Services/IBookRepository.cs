@@ -10,6 +10,7 @@ public interface IBookRepository
     Task<IReadOnlyList<BookSearchResult>> KeywordSearchAsync(string query, int limit, CancellationToken ct);
     Task<IReadOnlyList<BookSearchResult>> VectorSearchAsync(IReadOnlyList<float> embedding, int limit, CancellationToken ct);
     Task<IReadOnlyList<BookSearchResult>> HybridSearchAsync(string query, IReadOnlyList<float> embedding, int limit, CancellationToken ct);
+    Task<IReadOnlyList<BookSearchResult>> FuzzySearchAsync(string query, int limit, CancellationToken ct);
     Task<IReadOnlyList<GraphSearchResult>> GraphSearchAsync(Guid seedBookId, int limit, CancellationToken ct);
     Task BuildGraphAsync(IReadOnlyCollection<Book> books, CancellationToken ct);
 }

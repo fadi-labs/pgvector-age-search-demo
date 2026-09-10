@@ -96,7 +96,8 @@ class Program
             "a gripping science fiction tale about survival",
             "a classic romance set in a grand estate",
             "a dystopian novel about government control",
-            "a fantasy epic about a young wizard"
+            "a fantasy epic about a young wizard",
+            "neuromancr"
         };
 
         Console.WriteLine("\nSearch examples:");
@@ -138,6 +139,10 @@ class Program
             Console.WriteLine($"\n--- Hybrid Search for \"{searchText}\" ---");
             var hybridResults = await repo.HybridSearchAsync(searchText, sampleEmbedding, 5, CancellationToken.None);
             PrintResults(hybridResults, "Hybrid");
+
+            Console.WriteLine($"\n--- Fuzzy Search for \"{searchText}\" ---");
+            var fuzzyResults = await repo.FuzzySearchAsync(searchText, 5, CancellationToken.None);
+            PrintResults(fuzzyResults, "Fuzzy");
 
             Console.WriteLine("\n--- Graph Search ---");
             var graphResults = await repo.GraphSearchAsync(books[0].Id, 5, CancellationToken.None);

@@ -201,6 +201,33 @@ public class BookRepository : IBookRepository
         return results;
     }
 
+    public async Task<IReadOnlyList<BookSearchResult>> FuzzySearchAsync(string query, int limit, CancellationToken ct)
+    {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT id, title, similarity(title, @query) AS score
+            FROM books
+            WHERE title % @query
+            ORDER BY score DESC
+            LIMIT @limit", conn);
+        cmd.Parameters.AddWithValue("query", query);
+        cmd.Parameters.AddWithValue("limit", limit);
+
+        var results = new List<BookSearchResult>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new BookSearchResult
+            {
+                Id = reader.GetGuid(0),
+                Title = reader.GetString(1),
+                Score = reader.GetFloat(2)
+            });
+        }
+        return results;
+    }
+
     public async Task<IReadOnlyList<GraphSearchResult>> GraphSearchAsync(Guid seedBookId, int limit, CancellationToken ct)
     {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);

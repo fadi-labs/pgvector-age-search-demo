@@ -1,6 +1,31 @@
 # PostgreSQL Search Strategies Playground
 
-This repo is a hands-on playground for comparing four different ways to search the
+## Why Search Matters for AI Agents
+
+AI agents are only as effective as the information they can retrieve.
+
+When an agent needs to search a large dataset, sending everything to an LLM is
+expensive, slow, and often produces worse results. A better approach is to
+retrieve the smallest, most relevant set of information first, and only then
+provide that context to the model.
+
+This repository explores different PostgreSQL search strategies that can be used
+individually or combined into a hybrid search approach:
+
+- **Full-Text Search (FTS)** — lexical search with linguistic processing such as stemming and ranking
+- **Vector Search (`pgvector`)** — semantic search based on meaning rather than exact words
+- **Hybrid Search** — combines FTS and vector search to benefit from both lexical precision and semantic similarity
+- **Fuzzy Search (`pg_trgm`)** — typo-tolerant matching based on character trigram overlap
+- **Graph Search (Apache AGE)** — discovers relationships between entities
+
+For AI agents and RAG systems, hybrid retrieval can provide better context than
+relying on embeddings alone. The goal is to retrieve better context with less
+noise, reducing the amount of data sent to the LLM and potentially reducing
+token usage, latency, and cost.
+
+Search first. Reason second.
+
+This repo is a hands-on playground for comparing five different ways to search the
 same data in PostgreSQL, all running against one small seed dataset of 10 books:
 
 | Strategy | How it matches | Powered by |
@@ -8,11 +33,12 @@ same data in PostgreSQL, all running against one small seed dataset of 10 books:
 | **Keyword (full-text) search** | Literal words, normalized (stemmed, stopword-filtered) | PostgreSQL `tsvector` / `tsquery` |
 | **Vector (semantic) search** | Meaning, via embedding distance | `pgvector` + an OpenRouter embedding model |
 | **Hybrid search** | Both of the above, blended | `pgvector` + `tsvector`, combined client-side |
+| **Fuzzy search** | Character-level similarity, tolerant of typos | PostgreSQL `pg_trgm` |
 | **Graph search** | Relationships between books | Apache AGE (Cypher), fed by `pgvector` |
 
 The runnable demo is a .NET 10 console app + a single PostgreSQL container with
 `pgvector`, Apache AGE, and `pg_trgm` installed (see "Running these yourself" below
-for setup and how to run it). This document is about *what the four strategies
+for setup and how to run it). This document is about *what the five strategies
 actually do differently* and demonstrates it with real output against the seed data.
 
 The app ships with **two implementations of the same `IBookRepository` interface**:
@@ -135,6 +161,11 @@ you could have lived") shares no stems with "warm", "story", "second", "chances"
 `VectorSearchAsync` compares the OpenRouter embedding of the query against each book's
 stored embedding via `pgvector`'s `<=>` distance operator, not against literal text.
 
+Like keyword search, the embedding covers the whole document, not just the title:
+`Program.cs` builds the text sent to the embedding model from
+`{Title}\n{Authors}\n{Categories}\n{Description}` before storing it, so a paraphrase
+of the description alone (as here) is enough to match.
+
 ## 4. Hybrid search blends both signals
 
 `HybridSearchAsync` runs keyword and vector search independently and combines their
@@ -159,7 +190,67 @@ that only appeared in the vector results. (The score scale itself isn't comparab
 across strategies — `ts_rank_cd`, cosine distance, and RRF sums are different units —
 only the *within-method* ranking is meaningful.)
 
-## 5. Graph search: how books are related, without touching text at query time
+## 5. Fuzzy search catches typos the other three miss
+
+`FuzzySearchAsync` uses `pg_trgm`: it breaks `title` into overlapping 3-character
+sequences ("trigrams") and matches on how many trigrams two strings share, via the
+`%` operator and `similarity()`, backed by the `books_title_trgm_idx` GIN index. It
+doesn't understand words or meaning at all — purely character-level overlap — which
+makes it the odd one out, and complementary to the other three.
+
+**Scope is narrower than keyword/vector search, on purpose here:** unlike
+`search_document` (title+authors/categories+description, §1) and the embedding text
+(title+authors+categories+description, §3), fuzzy search only has a trigram index
+on `title` — there's no index on `description`. So a typo of a word that only
+appears in the description won't match. For example, `"wizrd"` (a typo of "wizard")
+returns nothing, even though *The Name of the Wind*'s description says "an infamous
+wizard" — "wizard" isn't in that book's title, so there's nothing for the trigram
+comparison to match against. Extending fuzzy search to the description would mean
+adding a second `gin_trgm_ops` index on that column and checking similarity against
+both.
+
+Query: `"neuromancr"` (missing the final "e")
+
+```
+--- Keyword Search for "neuromancr" ---
+  No results from Keyword search.
+
+--- Vector Search for "neuromancr" ---
+  [Vector] Neuromancer (score: 0.3300)
+  [Vector] Brave New World (score: 0.1158)
+  [Vector] Dune (score: 0.0697)
+  [Vector] Project Hail Mary (score: 0.0632)
+  [Vector] 1984 (score: 0.0141)
+
+--- Hybrid Search for "neuromancr" ---
+  [Hybrid] 1984 (score: 0.0167)
+  [Hybrid] Project Hail Mary (score: 0.0167)
+  [Hybrid] Dune (score: 0.0167)
+  [Hybrid] Brave New World (score: 0.0166)
+  [Hybrid] Neuromancer (score: 0.0166)
+
+--- Fuzzy Search for "neuromancr" ---
+  [Fuzzy] Neuromancer (score: 0.6429)
+```
+
+Keyword search finds nothing — the misspelled token doesn't stem to anything in the
+corpus. Vector search does surface *Neuromancer*, but only because the embedding
+model happens to encode the misspelled token close enough to the real word — it's
+not designed for typo tolerance and the score is muted (0.33, versus 0.65+ for a
+correctly-spelled semantic match elsewhere in this document). Hybrid search actually
+makes things *worse* here: because keyword search contributes nothing, *Neuromancer*
+gets diluted down to last place behind four unrelated books that only ranked
+decently on the vector side. Fuzzy search is the only one of the three built for
+this exact failure mode, and it shows: *Neuromancer* is the sole, high-confidence
+result, purely from character overlap between "neuromancr" and "Neuromancer" — no
+embeddings or linguistic parsing involved.
+
+This is a real gap for AI agents too: user or tool-generated queries with typos,
+OCR errors, or transliteration variants defeat FTS outright and only weakly survive
+vector search. `pg_trgm` is cheap to add as a fallback or a blended signal alongside
+the other two.
+
+## 6. Graph search: how books are related, without touching text at query time
 
 This is the least obvious one, and worth explaining in full because it doesn't work
 the way you might expect a "book similarity graph" to work.
@@ -272,5 +363,6 @@ dotnet run
 
 Answer `y` the first time to seed data, generate embeddings, and build the graph.
 On later runs, answer `n` to reuse what's already in the database. The app then
-loops, asking for a new search phrase each time — try your own paraphrases against
-the descriptions above and compare all four result sets. Type `exit` to quit.
+loops, asking for a new search phrase each time — try your own paraphrases (and
+typos) against the descriptions above and compare all five result sets. Type
+`exit` to quit.

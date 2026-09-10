@@ -155,6 +155,21 @@ public class BookRepositoryEfCore : IBookRepository
         return results;
     }
 
+    public async Task<IReadOnlyList<BookSearchResult>> FuzzySearchAsync(string query, int limit, CancellationToken ct)
+    {
+        return await _db.Books.AsNoTracking()
+            .Where(b => EF.Functions.TrigramsAreSimilar(b.Title, query))
+            .Select(b => new BookSearchResult
+            {
+                Id = b.Id,
+                Title = b.Title,
+                Score = EF.Functions.TrigramsSimilarity(b.Title, query)
+            })
+            .OrderByDescending(r => r.Score)
+            .Take(limit)
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<GraphSearchResult>> GraphSearchAsync(Guid seedBookId, int limit, CancellationToken ct)
     {
         var connection = await OpenRawConnectionAsync(ct);
