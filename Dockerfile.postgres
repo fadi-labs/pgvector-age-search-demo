@@ -1,0 +1,42 @@
+FROM postgres:16-bookworm
+
+ARG PGVECTOR_VERSION=0.8.0
+ARG AGE_VERSION=PG16/v1.6.0-rc0
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        bison \
+        build-essential \
+        ca-certificates \
+        clang \
+        flex \
+        git \
+        libreadline-dev \
+        libssl-dev \
+        libtool \
+        llvm-dev \
+        pkg-config \
+        postgresql-server-dev-16 \
+        zlib1g-dev \
+    && git clone --depth 1 --branch "v${PGVECTOR_VERSION}" \
+        https://github.com/pgvector/pgvector.git /tmp/pgvector \
+    && make -C /tmp/pgvector \
+    && make -C /tmp/pgvector install \
+    && git clone --depth 1 --branch "${AGE_VERSION}" \
+        https://github.com/apache/age.git /tmp/age \
+    && make -C /tmp/age PG_CONFIG="$(command -v pg_config)" \
+    && make -C /tmp/age PG_CONFIG="$(command -v pg_config)" install \
+    && rm -rf /tmp/pgvector /tmp/age \
+    && apt-get purge -y --auto-remove \
+        bison \
+        build-essential \
+        clang \
+        flex \
+        git \
+        libreadline-dev \
+        libssl-dev \
+        libtool \
+        llvm-dev \
+        pkg-config \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
